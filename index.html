@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>P2P FPS Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#0b0e14; color:#e6e6e6; font-family:system-ui, sans-serif; }
+  #ui {
+    position: fixed; top: 10px; left: 10px; width: 360px; max-width: 92vw;
+    background: rgba(8,10,16,0.8); border: 1px solid #222; border-radius: 10px; padding: 12px; backdrop-filter: blur(6px);
+  }
+  #ui h2 { margin: 0 0 8px 0; font-size: 16px; font-weight: 700; }
+  #ui .row { display: flex; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  #ui button, #ui textarea, #ui input {
+    font: inherit; border-radius: 8px; border: 1px solid #333; background:#121522; color:#e6e6e6; padding:8px;
+  }
+  #ui button { cursor:pointer; background: linear-gradient(180deg, #1f2436, #121522); }
+  #ui button:hover { filter: brightness(1.1); }
+  #localOffer, #remoteSDP { width:100%; height: 80px; }
+  #stats { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.3; }
+  #hints { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.3; }
+  #overlayPrompt {
+    position: fixed; inset: 0; display:flex; align-items:center; justify-content:center;
+    background: radial-gradient(ellipse at center, rgba(5,8,13,0.8) 0, rgba(5,8,13,0.95) 60%, rgba(5,8,13,1) 100%);
+    color:#dce2ff; font-weight:600; letter-spacing:0.3px; text-align:center;
+  }
+  #overlayPrompt.hidden { display:none; }
+  .pill { display:inline-block; padding: 4px 8px; border:1px solid #2a2f45; border-radius:999px; background:#111423; margin: 3px; }
+  canvas { display:block; width:100%; height:100%; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <h2>Decentralized P2P FPS (Prototype)</h2>
+  <div class="row">
+    <button id="btnCreateOffer">Create Offer</button>
+    <button id="btnAcceptOffer">Accept Offer / Create Answer</button>
+    <button id="btnAcceptAnswer">Accept Answer</button>
+  </div>
+  <div class="row">
+    <textarea id="localOffer" placeholder="Local Offer (copy me)"></textarea>
+  </div>
+  <div class="row">
+    <textarea id="remoteSDP" placeholder="Paste remote offer/answer here"></textarea>
+  </div>
+  <div class="row">
+    <input id="nameInput" placeholder="Your name (optional)" />
+    <button id="btnClearPeers">Disconnect All</button>
+  </div>
+  <div id="hints">
+    Controls:
+    <span class="pill">Enter: Lock pointer</span>
+    <span class="pill">WASD: Move</span>
+    <span class="pill">Space: Jump</span>
+    <span class="pill">Shift: Sprint</span>
+    <span class="pill">Click: Shoot</span>
+    <span class="pill">Esc: Release pointer</span>
+  </div>
+  <div id="stats"></div>
+</div>
+
+<div id="overlayPrompt">
+  <div>
+    <div style="font-size:22px; margin-bottom:8px;">Click anywhere, then press Enter to start</div>
+    <div style="opacity:0.8;">Open this file in multiple tabs/machines and connect via the UI</div>
+  </div>
+</div>
+
+<canvas id="c"></canvas>
+
+<!-- Three.js core -->
+<script src="https://unpkg.com/three@0.157.0/build/three.min.js"></script>
+
+<script>
+(function(){
+  // ---------- Utility ----------
+  const $ = sel => document.querySelector(sel);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a,b,t) => a+(b-a)*t;
+  const randId = () => Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b=>b.toString(16).padStart(2,'0')).join('');
+  const now = () => performance.now();
+  function hashColorFromId(id) {
+    let h=0; for (let i=0;i<id.length;i++) h = (h*131 + id.charCodeAt(i))>>>0;
+    const hue = h % 360; const sat = 60 + (h>>>10)%30; const light = 45 + (h>>>20)%10;
+    return new THREE.Color().setHSL(hue/360, sat/100, light/100);
+  }
+  function encode(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); }
+  function decode(str){ return JSON.parse(decodeURIComponent(escape(atob(str)))); }
+
+  // ---------- Networking (WebRTC P2P) ----------
+  const iceServers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] }];
+  const peers = new Map(); // id => { pc, dc, remoteDescSet, lastPing, rttMs, name, color, isOpen }
+  const myId = randId();
+  let myName = '';
+  const myColor = hashColorFromId(myId).getHexString();
+
+  const MSG = {
+    HELLO: 'hello',
+    STATE: 'state',
+    SHOOT: 'shoot',
+    HIT:   'hit',
+    PING:  'ping',
+    PONG:  'pong',
+  };
+
+  function newPeerConnection() {
+    const pc = new RTCPeerConnection({ iceServers });
+    pc.onconnectionstatechange = () => updateStats();
+    return pc;
+  }
+
+  function createDataChannel(pc) {
+    const dc = pc.createDataChannel('game', { ordered: true });
+    wireDataChannel(dc);
+    return dc;
+  }
+
+  function wireDataChannel(dc) {
+    dc.onopen = () => {
+      // greet
+      send(dc, { t: MSG.HELLO, id: myId, name: myName, color: myColor });
+      updateStats();
+    };
+    dc.onmessage = ev => onMessage(dc, ev.data);
+    dc.onclose = () => updateStats();
+    dc.onerror = () => updateStats();
+  }
+
+  function onMessage(dc, data) {
+    try {
+      const msg = JSON.parse(data);
+      switch (msg.t) {
+        case MSG.HELLO: {
+          const pid = msg.id;
+          let p = peers.get(pid);
+          if (!p) {
+            // We don't auto-create RTCPeerConnection on inbound hello; we only maintain DC info.
+            p = { pc: null, dc, remoteDescSet:true, name: msg.name||'', color: msg.color||'ffffff', isOpen: true, lastMsgTs: now() };
+            peers.set(pid, p);
+          } else {
+            p.dc = dc; p.name = msg.name||p.name; p.color = msg.color||p.color; p.isOpen = true; p.lastMsgTs = now();
+          }
+          ensureRemotePlayer(pid, p.name, p.color);
+          broadcastExcept(dc, msg); // naive re-broadcast to help converge state
+          break;
+        }
+        case MSG.STATE: {
+          const pid = msg.id; const st = msg.st;
+          const p = peers.get(pid) || { pc:null, dc, name:'', color: msg.color||'ffffff', isOpen: true };
+          peers.set(pid, p);
+          p.lastMsgTs = now();
+          upsertRemoteState(pid, st);
+          break;
+        }
+        case MSG.SHOOT: {
+          const pid = msg.id;
+          spawnTracer(msg.o, msg.d, 0xff5555);
+          // Optional: client-side hit detection for received shots (trust-based)
+          processIncomingShot(pid, msg.o, msg.d);
+          broadcastExcept(dc, msg);
+          break;
+        }
+        case MSG.HIT: {
+          const { victimId, dmg } = msg;
+          if (victimId === myId) applyDamage(dmg);
+          broadcastExcept(dc, msg);
+          break;
+        }
+        case MSG.PING: {
+          // echo
+          send(dc, { t: MSG.PONG, n: msg.n });
+          break;
+        }
+        case MSG.PONG: {
+          const rtt = now() - msg.n;
+          for (const [pid, p] of peers) if (p.dc === dc) { p.rttMs = rtt|0; p.lastMsgTs = now(); break; }
+          break;
+        }
+      }
+    } catch(e) { console.warn('bad message', e); }
+  }
+
+  function send(dc, obj) {
+    try { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(obj)); } catch {}
+  }
+  function broadcast(obj) {
+    for (const [,p] of peers) send(p.dc, obj);
+  }
+  function broadcastExcept(dc, obj) {
+    for (const [,p] of peers) if (p.dc !== dc) send(p.dc, obj);
+  }
+
+  async function createOffer() {
+    const pc = newPeerConnection();
+    const dc = createDataChannel(pc);
+    const local = { pc, dc, remoteDescSet:false, isOpen:false };
+    const key = randId(); // temporary key for this handshake
+    peers.set(key, local);
+
+    pc.onicegatheringstatechange = async () => {
+      if (pc.iceGatheringState === 'complete') {
+        $('#localOffer').value = encode({ type:'offer', sdp: pc.localDescription.sdp });
+      }
+    };
+    pc.onicecandidate = (ev) => {
+      if (!ev.candidate) {
+        // finalize
+      }
+    };
+
+    const offer = await pc.createOffer({ offerToReceiveAudio:false, offerToReceiveVideo:false });
+    await pc.setLocalDescription(offer);
+  }
+
+  async function acceptOfferCreateAnswer() {
+    const blob = $('#remoteSDP').value.trim();
+    if (!blob) return;
+    const remote = decode(blob);
+    if (remote.type !== 'offer' || !remote.sdp) return;
+
+    const pc = newPeerConnection();
+    pc.ondatachannel = ev => wireDataChannel(ev.channel);
+
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === 'complete') {
+        $('#localOffer').value = encode({ type:'answer', sdp: pc.localDescription.sdp });
+      }
+    };
+
+    await pc.setRemoteDescription({ type:'offer', sdp: remote.sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+  }
+
+  async function acceptAnswer() {
+    const blob = $('#remoteSDP').value.trim();
+    if (!blob) return;
+    const remote = decode(blob);
+    if (remote.type !== 'answer' || !remote.sdp) return;
+
+    // Find the one pending offer PC (the one with DC we created)
+    let pending = null;
+    for (const [k,p] of peers) {
+      if (p.pc && !p.remoteDescSet) { pending = { key:k, p }; break; }
+    }
+    if (!pending) return;
+
+    await pending.p.pc.setRemoteDescription({ type:'answer', sdp: remote.sdp });
+    pending.p.remoteDescSet = true;
+    updateStats();
+  }
+
+  function pingAll() {
+    const t = now();
+    for (const [,p] of peers) send(p.dc, { t: MSG.PING, n: t });
+  }
+
+  function disconnectAll() {
+    for (const [,p] of peers) {
+      try { p.dc && p.dc.close(); } catch {}
+      try { p.pc && p.pc.close(); } catch {}
+    }
+    peers.clear();
+    // Keep remote avatars but mark as stale; they will time out
+  }
+
+  // ---------- 3D Scene / Controls ----------
+  const canvas = $('#c');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, powerPreference:'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#0b0e14');
+
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
+  camera.position.set(0, 1.6, 5);
+
+  const ambient = new THREE.AmbientLight(0x556677, 0.4);
+  scene.add(ambient);
+
+  const keyLight = new THREE.DirectionalLight(0x99bbff, 0.8);
+  keyLight.position.set(6, 10, 4);
+  scene.add(keyLight);
+
+  const fillLight = new THREE.PointLight(0xff6699, 0.5, 30, 1.5);
+  fillLight.position.set(-6, 3, -4);
+  scene.add(fillLight);
+
+  // Ground
+  const groundGeo = new THREE.PlaneGeometry(200,200,1,1);
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x1b2133, roughness:0.95, metalness:0.05 });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI/2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // Some walls/boxes
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x20283f, roughness:0.9, metalness:0.05 });
+  for (let i=0;i<10;i++){
+    const w = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2+Math.random()*1.2, 1.2), wallMat);
+    w.position.set((Math.random()-0.5)*30, w.geometry.parameters.height/2, (Math.random()-0.5)*30);
+    scene.add(w);
+  }
+
+  // Sky gradient (big inverted sphere)
+  const skyGeo = new THREE.SphereGeometry(800, 32, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: { top:{value:new THREE.Color('#102437')}, bottom:{value:new THREE.Color('#060b12')} },
+    vertexShader: `
+      varying vec3 vPos;
+      void main() {
+        vPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vPos;
+      uniform vec3 top; uniform vec3 bottom;
+      void main(){
+        float h = normalize(vPos).y * 0.5 + 0.5;
+        vec3 c = mix(bottom, top, pow(h, 1.5));
+        gl_FragColor = vec4(c,1.0);
+      }
+    `
+  });
+  scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+  // Player avatar (for local we don't render body; remote players are boxes)
+  const remotePlayers = new Map(); // id => { mesh, name, color, last, target }
+  function ensureRemotePlayer(id, name='', colorHex='ffffff') {
+    if (id === myId) return;
+    if (remotePlayers.has(id)) return;
+    const mat = new THREE.MeshStandardMaterial({ color: parseInt(colorHex,16), roughness:0.6, metalness:0.2 });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.5,1.7,0.5), mat);
+    mesh.position.set(0, 0.85, 0);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+
+    // name tag
+    const sprite = nameTagSprite(name || id.slice(0,6));
+    sprite.position.set(0, 1.6, 0);
+    mesh.add(sprite);
+
+    scene.add(mesh);
+    remotePlayers.set(id, {
+      mesh, name, color: colorHex,
+      last: { pos:new THREE.Vector3(), rotY:0, t:now() },
+      target: { pos:new THREE.Vector3(), rotY:0, t:now() }
+    });
+  }
+
+  function nameTagSprite(text) {
+    const cnv = document.createElement('canvas'); cnv.width = 256; cnv.height=64;
+    const ctx = cnv.getContext('2d');
+    ctx.fillStyle='rgba(10,12,20,0.6)'; ctx.fillRect(0,0,cnv.width,cnv.height);
+    ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.strokeRect(0,0,cnv.width,cnv.height);
+    ctx.font='24px system-ui';
+    ctx.fillStyle='#e6e6e6'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(text, cnv.width/2, cnv.height/2);
+    const tex = new THREE.CanvasTexture(cnv);
+    tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+    const mat = new THREE.SpriteMaterial({ map: tex, depthWrite:false, depthTest:true, transparent:true });
+    const spr = new THREE.Sprite(mat); spr.scale.set(1.3, 0.33, 1);
+    return spr;
+  }
+
+  // Simple pointer-lock FPS controls
+  const keys = new Set();
+  let pointerLocked = false;
+  let yaw = 0, pitch = 0;
+  let vel = new THREE.Vector3(0,0,0);
+  const onGroundEpsilon = 0.06;
+  let wantsJump = false;
+
+  document.addEventListener('click', () => { /* allow audio later */ });
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Enter' && !pointerLocked) requestPointerLock();
+    keys.add(e.code);
+    if (e.code === 'Space') wantsJump = true;
+  });
+  document.addEventListener('keyup', (e) => keys.delete(e.code));
+  function requestPointerLock() {
+    canvas.requestPointerLock = canvas.requestPointerLock || canvas.webkitRequestPointerLock;
+    if (canvas.requestPointerLock) canvas.requestPointerLock();
+  }
+  document.addEventListener('pointerlockchange', () => {
+    pointerLocked = (document.pointerLockElement === canvas);
+    $('#overlayPrompt').classList.toggle('hidden', pointerLocked);
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!pointerLocked) return;
+    const sens = 0.0025;
+    yaw -= e.movementX * sens;
+    pitch -= e.movementY * sens;
+    pitch = clamp(pitch, -Math.PI/2+0.001, Math.PI/2-0.001);
+  });
+
+  // Shooting
+  const ray = new THREE.Raycaster();
+  const tmpV3 = new THREE.Vector3();
+  let lastShotAt = -Infinity;
+  const shotCooldown = 140; // ms
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (!pointerLocked) return;
+    tryShoot();
+  });
+
+  function tryShoot() {
+    const t = now();
+    if (t - lastShotAt < shotCooldown) return;
+    lastShotAt = t;
+
+    const origin = camera.position.clone();
+    const dir = new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch, yaw, 0));
+    spawnTracer(origin, dir, 0x66ddff);
+
+    // Client-side hit detection for remote players (trust-based demo)
+    let hitId = null;
+    let minDist = Infinity;
+    for (const [pid, rp] of remotePlayers) {
+      const box = new THREE.Box3().setFromObject(rp.mesh);
+      const hit = rayBoxIntersect(origin, dir, box);
+      if (hit && hit.t < minDist) { minDist = hit.t; hitId = pid; }
+    }
+    if (hitId) {
+      broadcast({ t: MSG.HIT, victimId: hitId, dmg: 25 });
+    }
+
+    broadcast({ t: MSG.SHOOT, id: myId, o: origin.toArray(), d: dir.toArray() });
+  }
+
+  function processIncomingShot(fromId, originArr, dirArr) {
+    // You could implement authority rules or lag compensation here.
+    // For now, trust shooter and show tracer:
+    // (Already spawned in onMessage to visualize)
+  }
+
+  function spawnTracer(originArrOrVec, dirArrOrVec, color=0xffffff) {
+    const o = Array.isArray(originArrOrVec) ? new THREE.Vector3().fromArray(originArrOrVec) : originArrOrVec.clone();
+    const d = Array.isArray(dirArrOrVec) ? new THREE.Vector3().fromArray(dirArrOrVec) : dirArrOrVec.clone();
+
+    const len = 50;
+    const end = o.clone().addScaledVector(d, len);
+    const geom = new THREE.BufferGeometry().setFromPoints([o, end]);
+    const mat = new THREE.LineBasicMaterial({ color, transparent:true, opacity:0.8 });
+    const line = new THREE.Line(geom, mat);
+    scene.add(line);
+    // fade out
+    const start = now();
+    (function fade(){
+      const t = (now()-start)/300;
+      if (t >= 1) { scene.remove(line); geom.dispose(); mat.dispose(); return; }
+      mat.opacity = 0.8*(1-t);
+      requestAnimationFrame(fade);
+    })();
+  }
+
+  function rayBoxIntersect(origin, dir, box) {
+    // slab method
+    let tmin = -Infinity, tmax = Infinity;
+    for (const axis of ['x','y','z']) {
+      const o = origin[axis], d = dir[axis];
+      const min = box.min[axis], max = box.max[axis];
+      if (Math.abs(d) < 1e-6) {
+        if (o < min || o > max) return null;
+      } else {
+        let t1 = (min - o)/d, t2 = (max - o)/d;
+        if (t1 > t2) [t1,t2] = [t2,t1];
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) return null;
+      }
+    }
+    return { t: tmin>=0 ? tmin : tmax };
+  }
+
+  // Health / respawn
+  let health = 100;
+  const spawnPoints = [
+    new THREE.Vector3( 0,0, 8), new THREE.Vector3(8,0,0),
+    new THREE.Vector3(-8,0, 0), new THREE.Vector3(0,0,-8),
+    new THREE.Vector3(12,0, 12), new THREE.Vector3(-12,0,-12)
+  ];
+  function respawn() {
+    health = 100;
+    const sp = spawnPoints[(Math.random()*spawnPoints.length)|0];
+    camera.position.set(sp.x, 1.6, sp.z);
+    vel.set(0,0,0);
+  }
+  function applyDamage(dmg=25) {
+    health = Math.max(0, health - dmg);
+    if (health === 0) {
+      // tiny effect
+      flashScreen('#ff3355');
+      setTimeout(respawn, 600);
+    } else {
+      flashScreen('#ff8899', 200);
+    }
+  }
+  function flashScreen(color, dur=350) {
+    const div = document.createElement('div');
+    div.style.position='fixed'; div.style.inset='0';
+    div.style.background = color; div.style.opacity='0.15'; div.style.pointerEvents='none';
+    document.body.appendChild(div);
+    const start = now();
+    (function fade(){
+      const t = (now()-start)/dur;
+      if (t>=1) { div.remove(); return; }
+      div.style.opacity = String(0.15*(1-t));
+      requestAnimationFrame(fade);
+    })();
+  }
+
+  // Remote state smoothing
+  function upsertRemoteState(id, st) {
+    ensureRemotePlayer(id);
+    const rp = remotePlayers.get(id);
+    rp.last = { ...rp.target };
+    rp.target = {
+      pos: new THREE.Vector3(st.p[0], st.p[1], st.p[2]),
+      rotY: st.r, t: now()
+    };
+  }
+
+  // ---------- Game Loop ----------
+  let lastTick = now();
+
+  function update(dt) {
+    // Move
+    const accel = 28;
+    const friction = 8;
+    const gravity = 30;
+    const jumpVel = 7.2;
+    const sprint = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1.6 : 1.0;
+
+    // orientation
+    const forward = new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(0, yaw, 0));
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).negate();
+
+    let wish = new THREE.Vector3();
+    if (keys.has('KeyW')) wish.add(forward);
+    if (keys.has('KeyS')) wish.add(forward.clone().negate());
+    if (keys.has('KeyA')) wish.add(right.clone().negate());
+    if (keys.has('KeyD')) wish.add(right);
+    if (wish.lengthSq()>0) wish.normalize();
+
+    const onGround = (camera.position.y <= 1.6 + onGroundEpsilon);
+    // Horizontal accel
+    const desired = wish.multiplyScalar(accel * sprint);
+    vel.x = lerp(vel.x, desired.x, dt*5);
+    vel.z = lerp(vel.z, desired.z, dt*5);
+
+    // Gravity & jump
+    if (onGround) {
+      camera.position.y = 1.6;
+      vel.y = Math.max(0, vel.y);
+      if (wantsJump) { vel.y = jumpVel; wantsJump = false; }
+      // friction on ground
+      vel.x = lerp(vel.x, 0, dt*friction);
+      vel.z = lerp(vel.z, 0, dt*friction);
+    } else {
+      vel.y -= gravity * dt;
+    }
+
+    // Integrate
+    camera.position.addScaledVector(vel, dt);
+
+    // Simple ground collision
+    if (camera.position.y < 1.6) camera.position.y = 1.6;
+
+    // Apply orientation
+    camera.rotation.set(pitch, yaw, 0);
+
+    // Broadcast our state at ~15 Hz
+    netAccumulator += dt;
+    if (netAccumulator >= (1/15)) {
+      netAccumulator = 0;
+      broadcast({
+        t: MSG.STATE, id: myId,
+        st: { p: camera.position.toArray(), r: yaw }
+      });
+      pingAll();
+    }
+
+    // Interpolate remote players
+    for (const [id, rp] of remotePlayers) {
+      const s = rp.mesh;
+      // interp by small factor towards target
+      s.position.lerp(rp.target.pos, clamp(dt*8, 0, 1));
+      // rotate only around Y
+      s.rotation.y = lerp(s.rotation.y, rp.target.rotY, clamp(dt*8, 0, 1));
+    }
+
+    // Cull stale peers (no messages in > 10s)
+    const cutoff = now() - 10000;
+    for (const [pid, p] of peers) {
+      if (p.lastMsgTs && p.lastMsgTs < cutoff) {
+        try { p.dc && p.dc.close(); } catch{}
+        try { p.pc && p.pc.close(); } catch{}
+        peers.delete(pid);
+      }
+    }
+  }
+
+  let netAccumulator = 0;
+
+  function frame() {
+    const t = now();
+    const dt = Math.min(0.05, (t - lastTick)/1000);
+    lastTick = t;
+    update(dt);
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+
+  function onResize() {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+  window.addEventListener('resize', onResize);
+
+  // ---------- UI wiring ----------
+  $('#btnCreateOffer').onclick = createOffer;
+  $('#btnAcceptOffer').onclick = acceptOfferCreateAnswer;
+  $('#btnAcceptAnswer').onclick = acceptAnswer;
+  $('#btnClearPeers').onclick = disconnectAll;
+  $('#nameInput').addEventListener('change', () => {
+    myName = $('#nameInput').value.trim();
+  });
+
+  function updateStats() {
+    let lines = [];
+    let open = 0;
+    for (const [pid, p] of peers) {
+      const dc = p.dc;
+      if (dc && dc.readyState === 'open') open++;
+    }
+    lines.push(`Your ID: ${myId.slice(0,8)}  |  Health: ${health}`);
+    lines.push(`Peers open: ${open} / ${peers.size}`);
+    for (const [pid, p] of peers) {
+      const label = (p.name ? p.name : pid.slice(0,6));
+      const dcState = p.dc ? p.dc.readyState : 'n/a';
+      const rtt = p.rttMs ? ` ${p.rttMs}ms` : '';
+      lines.push(`- ${label}: ${dcState}${rtt}`);
+      // ensure remote avatar visible
+      ensureRemotePlayer(pid, p.name||'', p.color||'ffffff');
+    }
+    $('#stats').textContent = lines.join('\n');
+  }
+
+  // ---------- Start ----------
+  respawn();
+  frame();
+
+  // Periodic stats refresh
+  setInterval(updateStats, 500);
+})();
+</script>
+</body>
+</html>
