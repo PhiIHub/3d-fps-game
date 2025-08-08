@@ -5,60 +5,81 @@
 <title>P2P FPS Prototype — Decentralized + Anti-Cheat</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
-  html, body { margin:0; padding:0; height:100%; background:#0b0e14; color:#e6e6e6; font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; }
+  html, body { margin:0; padding:0; height:100%; background:#0b0e14; color:#e6e6e6;
+    font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; }
+  canvas { display:block; width:100%; height:100%; }
+
+  /* UI panel (hidden while playing; shown on Esc) */
   #ui {
-    position: fixed; top: 10px; left: 10px; width: 380px; max-width: 92vw;
-    background: rgba(8,10,16,0.85); border: 1px solid #222; border-radius: 12px; padding: 12px; backdrop-filter: blur(6px);
-    z-index: 10;
+    position: fixed; top: 10px; left: 10px; width: 420px; max-width: 92vw;
+    background: rgba(8,10,16,0.88); border: 1px solid #222; border-radius: 12px; padding: 12px;
+    backdrop-filter: blur(6px); z-index: 10;
   }
-  #ui h2 { margin: 0 0 8px 0; font-size: 16px; font-weight: 800; letter-spacing: 0.2px; }
-  #ui .row { display: flex; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  #ui.hidden { display: none; }
+  #ui h2 { margin: 0 0 10px 0; font-size: 16px; font-weight: 800; letter-spacing: 0.2px; }
+  #ui .row { display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
   #ui button, #ui textarea, #ui input {
     font: inherit; border-radius: 10px; border: 1px solid #2b3148; background:#121522; color:#e6e6e6; padding:9px 10px;
   }
   #ui button { cursor:pointer; background: linear-gradient(180deg, #1f2436, #121522); }
   #ui button:hover { filter: brightness(1.07); }
-  #localOffer, #remoteSDP { width:100%; height: 84px; resize: vertical; }
+  #signalBox { width:100%; height: 96px; resize: vertical; }
   #stats { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.35; white-space: pre-wrap; }
-  #hints { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.35; }
+  #hints { font-size: 12px; opacity: 0.9; margin-top: 2px; line-height: 1.35; }
   .pill { display:inline-block; padding: 4px 8px; border:1px solid #2a2f45; border-radius:999px; background:#111423; margin: 3px; }
+
+  /* Overlay prompt (shown until Enter; also shown when unlocked) */
   #overlayPrompt {
     position: fixed; inset: 0; display:flex; align-items:center; justify-content:center;
     background: radial-gradient(ellipse at center, rgba(5,8,13,0.8) 0, rgba(5,8,13,0.95) 60%, rgba(5,8,13,1) 100%);
     color:#dce2ff; font-weight:700; letter-spacing:0.3px; text-align:center; z-index: 5;
   }
   #overlayPrompt.hidden { display:none; }
+
+  /* Flag banner */
   #flagBanner {
     position: fixed; right: 10px; top: 10px; z-index: 10;
     padding: 8px 10px; border-radius: 10px; background: rgba(255,60,100,0.1); border: 1px solid rgba(255,60,100,0.25);
-    font-size: 12px; max-width: 320px;
+    font-size: 12px; max-width: 320px; display:none;
   }
-  canvas { display:block; width:100%; height:100%; }
+
+  /* HUD Health bar (bottom centered) */
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 14px; display:flex; justify-content:center; z-index: 6;
+    pointer-events:none;
+  }
+  #healthBar {
+    width: 360px; max-width: 60vw; height: 14px; border-radius: 999px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+  }
+  #healthFill {
+    height: 100%; width: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, #27d17c, #18b36a);
+    box-shadow: 0 0 6px rgba(39,209,124,0.6);
+    transition: width 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  }
 </style>
 </head>
 <body>
 <div id="ui">
   <h2>Decentralized P2P FPS (Prototype)</h2>
   <div class="row">
-    <button id="btnCreateOffer">Create Offer</button>
-    <button id="btnAcceptOffer">Accept Offer / Create Answer</button>
-    <button id="btnAcceptAnswer">Accept Answer</button>
-  </div>
-  <div class="row">
-    <textarea id="localOffer" placeholder="Local Offer/Answer (copy me)"></textarea>
-  </div>
-  <div class="row">
-    <textarea id="remoteSDP" placeholder="Paste remote offer/answer here"></textarea>
-  </div>
-  <div class="row">
     <input id="nameInput" placeholder="Your name (optional)" />
-    <button id="btnClearPeers">Disconnect All</button>
+    <button id="btnDisconnect">Disconnect All</button>
+  </div>
+  <div class="row">
+    <button id="btnCreateInvite">Copy My Invite Code</button>
+    <button id="btnPasteCode">Paste Code</button>
+  </div>
+  <div class="row">
+    <textarea id="signalBox" placeholder="Codes go here. Click 'Copy My Invite Code' to generate, 'Paste Code' to accept or finalize."></textarea>
   </div>
   <div id="hints">
     Controls:
-    <span class="pill">Enter: Lock pointer</span>
-    <span class="pill">Esc: Unlock pointer (interact with UI)</span>
-    <span class="pill">WASD: Move</span>
+    <span class="pill">Enter: Lock pointer (play)</span>
+    <span class="pill">Esc: Unlock + show P2P panel</span>
+    <span class="pill">WASD: Move (A=left, D=right)</span>
     <span class="pill">Space: Jump</span>
     <span class="pill">Shift: Sprint</span>
     <span class="pill">Click: Shoot</span>
@@ -66,13 +87,17 @@
   <div id="stats"></div>
 </div>
 
-<div id="flagBanner" style="display:none;"></div>
+<div id="flagBanner"></div>
 
 <div id="overlayPrompt">
   <div>
-    <div style="font-size:22px; margin-bottom:8px;">Click the canvas, then press Enter to start</div>
-    <div style="opacity:0.8;">Press Esc any time to free the cursor and use the UI</div>
+    <div style="font-size:22px; margin-bottom:8px;">Click the canvas, then press Enter to play</div>
+    <div style="opacity:0.8;">Press Esc any time to unlock and open the P2P panel</div>
   </div>
+</div>
+
+<div id="hud">
+  <div id="healthBar"><div id="healthFill"></div></div>
 </div>
 
 <canvas id="c"></canvas>
@@ -95,6 +120,11 @@
   }
   function encode(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); }
   function decode(str){ return JSON.parse(decodeURIComponent(escape(atob(str)))); }
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch {
+      const ta = $('#signalBox'); const prev = ta.value; ta.value = text; ta.select(); document.execCommand('copy'); ta.value = prev; return false;
+    }
+  }
 
   // ---------- IDs / Names ----------
   const myId = randId();
@@ -148,78 +178,83 @@
     for (const [,p] of peers) if (p.dc !== dc) send(p.dc, obj);
   }
 
-  async function createOffer() {
+  // ---------- Simpler signaling UI: one box, two buttons ----------
+  async function createInvite() {
     const pc = newPeerConnection();
     const dc = createDataChannel(pc);
     const key = randId();
     peers.set(key, { pc, dc, remoteDescSet:false, isOpen:false });
 
-    pc.onicegatheringstatechange = () => {
-      if (pc.iceGatheringState === 'complete') {
-        $('#localOffer').value = encode({ type:'offer', sdp: pc.localDescription.sdp });
-      }
-    };
-
+    $('#signalBox').value = 'Generating invite...';
     const offer = await pc.createOffer({ offerToReceiveAudio:false, offerToReceiveVideo:false });
     await pc.setLocalDescription(offer);
+
+    await waitIceComplete(pc);
+    const code = encode({ type:'offer', sdp: pc.localDescription.sdp });
+    $('#signalBox').value = code;
+    await copy(code);
+    banner('Invite code copied. Share it. When they send back a code, paste it here and click "Paste Code".');
   }
 
-  async function acceptOfferCreateAnswer() {
-    const blob = $('#remoteSDP').value.trim(); if (!blob) return;
-    const remote = decode(blob);
-    if (remote.type !== 'offer' || !remote.sdp) return;
+  async function pasteCode() {
+    const blob = $('#signalBox').value.trim(); if (!blob) return;
+    let obj;
+    try { obj = decode(blob); } catch { banner('Invalid code'); return; }
+    if (!obj.type || !obj.sdp) { banner('Invalid code'); return; }
 
-    const pc = newPeerConnection();
-    pc.ondatachannel = ev => wireDataChannel(ev.channel);
-
-    pc.onicegatheringstatechange = () => {
-      if (pc.iceGatheringState === 'complete') {
-        $('#localOffer').value = encode({ type:'answer', sdp: pc.localDescription.sdp });
+    if (obj.type === 'offer') {
+      // Accept their offer; create answer and copy it back to clipboard
+      const pc = newPeerConnection();
+      pc.ondatachannel = ev => wireDataChannel(ev.channel);
+      await pc.setRemoteDescription({ type:'offer', sdp: obj.sdp });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await waitIceComplete(pc);
+      const code = encode({ type:'answer', sdp: pc.localDescription.sdp });
+      $('#signalBox').value = code;
+      await copy(code);
+      banner('Answer code copied. Send it back to the inviter to finalize.');
+    } else if (obj.type === 'answer') {
+      // Finalize our pending local offer
+      for (const [k,p] of peers) {
+        if (p.pc && !p.remoteDescSet) {
+          await p.pc.setRemoteDescription({ type:'answer', sdp: obj.sdp });
+          p.remoteDescSet = true;
+          banner('Connection finalized.');
+          break;
+        }
       }
-    };
-
-    await pc.setRemoteDescription({ type:'offer', sdp: remote.sdp });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-  }
-
-  async function acceptAnswer() {
-    const blob = $('#remoteSDP').value.trim(); if (!blob) return;
-    const remote = decode(blob);
-    if (remote.type !== 'answer' || !remote.sdp) return;
-
-    // Find pending local offer
-    for (const [k,p] of peers) {
-      if (p.pc && !p.remoteDescSet) {
-        await p.pc.setRemoteDescription({ type:'answer', sdp: remote.sdp });
-        p.remoteDescSet = true;
-        updateStats();
-        break;
-      }
+    } else {
+      banner('Unknown code type');
     }
   }
 
-  function pingAll() {
-    const t = now();
-    for (const [,p] of peers) send(p.dc, { t: MSG.PING, n: t });
+  function waitIceComplete(pc) {
+    if (pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise(resolve => {
+      function check() {
+        if (pc.iceGatheringState === 'complete') {
+          pc.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      }
+      pc.addEventListener('icegatheringstatechange', check);
+    });
   }
 
   function disconnectAll() {
     for (const [,p] of peers) { try { p.dc && p.dc.close(); } catch{} try { p.pc && p.pc.close(); } catch{} }
     peers.clear();
     updateStats();
+    banner('Disconnected all peers.');
   }
 
   // ---------- Anti-cheat (decentralized, trust-based) ----------
-  // Per-sender tracking: state freshness, shot history, hit rates, flags
-  const ac = new Map(); // senderId -> { lastStateAt:ms, shots:[{t,o:[],d:[]}], hitTimes:[], rejects:[], flagged:false, trust:1 }
-
-  // Self position history for rewind validation
-  const selfHistory = []; // {t, p:THREE.Vector3}
+  const ac = new Map(); // senderId -> { lastStateAt, shots, hitTimes, rejects, flagged, trust }
+  const selfHistory = []; // {t, p}
   const SELF_HISTORY_MS = 2500;
-
-  // Flag propagation
   const flaggedPeers = new Set();
+
   function ensureAC(senderId) {
     if (!ac.has(senderId)) ac.set(senderId, { lastStateAt: 0, shots: [], hitTimes: [], rejects: [], flagged: false, trust: 1 });
     return ac.get(senderId);
@@ -227,16 +262,12 @@
   function recordReject(senderId, reason) {
     const e = ensureAC(senderId);
     e.rejects.push({ t: now(), reason });
-    // Clean recent window
     const cutoff = now() - 5000;
     e.rejects = e.rejects.filter(x => x.t >= cutoff);
-    if (!e.flagged) {
-      const recentRejects = e.rejects.length;
-      if (recentRejects >= 3) {
-        e.flagged = true; flaggedPeers.add(senderId);
-        broadcast({ t: MSG.FLAG, id: senderId, why: reason });
-        showFlag(`${labelFor(senderId)} flagged: ${reason}`);
-      }
+    if (!e.flagged && e.rejects.length >= 3) {
+      e.flagged = true; flaggedPeers.add(senderId);
+      broadcast({ t: MSG.FLAG, id: senderId, why: reason });
+      showFlag(`${labelFor(senderId)} flagged: ${reason}`);
     }
   }
   function recordHitRate(senderId) {
@@ -258,38 +289,28 @@
     const cutoff = t - 1200;
     e.shots = e.shots.filter(s => s.t >= cutoff);
   }
-  function lastRecentShot(senderId, windowMs = 400) {
+  function lastRecentShot(senderId, windowMs = 450) {
     const e = ensureAC(senderId);
     const t = now();
-    for (let i=e.shots.length-1; i>=0; i--) {
-      const s = e.shots[i];
-      if (t - s.t <= windowMs) return s;
-    }
+    for (let i=e.shots.length-1; i>=0; i--) if (t - e.shots[i].t <= windowMs) return e.shots[i];
     return null;
   }
-  function setLastState(senderId) {
-    ensureAC(senderId).lastStateAt = now();
-  }
-  function isStateFresh(senderId, maxMs = 2500) {
-    return (now() - ensureAC(senderId).lastStateAt) <= maxMs;
-  }
+  function setLastState(senderId) { ensureAC(senderId).lastStateAt = now(); }
+  function isStateFresh(senderId, maxMs = 2500) { return (now() - ensureAC(senderId).lastStateAt) <= maxMs; }
 
-  // Validation: victim side
   function validateIncomingHit(fromId, dmg) {
-    // Basic sanity
     if (flaggedPeers.has(fromId)) return { ok:false, reason:'sender-flagged' };
     if (!(dmg >= 1 && dmg <= 100)) return { ok:false, reason:'bad-damage' };
     if (!isStateFresh(fromId)) return { ok:false, reason:'stale-state' };
     if (!recordHitRate(fromId)) return { ok:false, reason:'rate-limit' };
 
-    const shot = lastRecentShot(fromId, 450);
+    const shot = lastRecentShot(fromId, 500);
     if (!shot) return { ok:false, reason:'no-recent-shot' };
 
-    // Rewind to closest self position near shot time
     const target = closestHistory(shot.t);
     if (!target) return { ok:false, reason:'no-self-history' };
 
-    // Approximate body as a standing box around target position
+    // AABB around the rewound self position
     const pos = target.p;
     const half = new THREE.Vector3(0.25, 0.85, 0.25);
     const min = pos.clone().add(new THREE.Vector3(-half.x, 0.0, -half.z));
@@ -298,27 +319,18 @@
 
     const hit = rayBoxIntersect(new THREE.Vector3().fromArray(shot.o), new THREE.Vector3().fromArray(shot.d), box);
     if (!hit) return { ok:false, reason:'no-intersection' };
-
-    // Optional: max distance check
     if (hit.t > 60) return { ok:false, reason:'too-far' };
-
     return { ok:true };
   }
-
   function closestHistory(tShot) {
     if (selfHistory.length === 0) return null;
     let best = selfHistory[0], bestDt = Math.abs(best.t - tShot);
-    for (let i=1;i<selfHistory.length;i++) {
-      const d = Math.abs(selfHistory[i].t - tShot);
-      if (d < bestDt) { best = selfHistory[i]; bestDt = d; }
-    }
+    for (let i=1;i<selfHistory.length;i++) { const d = Math.abs(selfHistory[i].t - tShot); if (d < bestDt) { best = selfHistory[i]; bestDt = d; } }
     return best;
   }
-
   function showFlag(text) {
     const el = $('#flagBanner');
-    el.textContent = text;
-    el.style.display = 'block';
+    el.textContent = text; el.style.display = 'block'; el.style.opacity = '1';
     const start = now();
     (function fade(){
       const t = (now()-start)/3000;
@@ -327,6 +339,7 @@
       requestAnimationFrame(fade);
     })();
   }
+  function banner(text){ showFlag(text); }
 
   // ---------- Messages ----------
   function onMessage(dc, data) {
@@ -343,7 +356,7 @@
             p.dc = dc; p.name = msg.name||p.name; p.color = msg.color||p.color; p.isOpen = true; p.lastMsgTs = now();
           }
           ensureRemotePlayer(pid, p.name, p.color);
-          broadcastExcept(dc, msg); // naive gossip
+          broadcastExcept(dc, msg); // gossip
           updateStats();
           break;
         }
@@ -360,32 +373,21 @@
           const pid = msg.id;
           recordShot(pid, msg.o, msg.d);
           spawnTracer(msg.o, msg.d, 0xff6666);
-          broadcastExcept(dc, msg); // gossip
+          broadcastExcept(dc, msg);
           break;
         }
         case MSG.HIT: {
           const { fromId, victimId, dmg } = msg;
           if (victimId === myId) {
             const res = validateIncomingHit(fromId, dmg);
-            if (res.ok) {
-              applyDamage(dmg);
-              // Re-broadcast accepted hit (so late joiners converge)
-              broadcastExcept(dc, msg);
-            } else {
-              recordReject(fromId, res.reason);
-            }
+            if (res.ok) { applyDamage(dmg); broadcastExcept(dc, msg); }
+            else { recordReject(fromId, res.reason); }
           } else {
-            // If sender is flagged, don't gossip further
-            if (!flaggedPeers.has(fromId)) {
-              broadcastExcept(dc, msg);
-            }
+            if (!flaggedPeers.has(fromId)) broadcastExcept(dc, msg);
           }
           break;
         }
-        case MSG.PING: {
-          send(dc, { t: MSG.PONG, n: msg.n });
-          break;
-        }
+        case MSG.PING: { send(dc, { t: MSG.PONG, n: msg.n }); break; }
         case MSG.PONG: {
           const rtt = now() - msg.n;
           for (const [pid, p] of peers) if (p.dc === dc) { p.rttMs = rtt|0; p.lastMsgTs = now(); break; }
@@ -395,8 +397,7 @@
           const id = msg.id;
           if (!flaggedPeers.has(id)) {
             flaggedPeers.add(id);
-            const e = ensureAC(id);
-            e.flagged = true;
+            const e = ensureAC(id); e.flagged = true;
             showFlag(`${labelFor(id)} flagged via gossip (${msg.why||'suspicious'})`);
             updateStats();
           }
@@ -422,22 +423,15 @@
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
   camera.position.set(0, 1.6, 5);
-  camera.rotation.order = 'YXZ'; // proper FPS: yaw around Y, then pitch around X
+  camera.rotation.order = 'YXZ';
 
-  const ambient = new THREE.AmbientLight(0x556677, 0.4);
-  scene.add(ambient);
+  const ambient = new THREE.AmbientLight(0x556677, 0.4); scene.add(ambient);
+  const keyLight = new THREE.DirectionalLight(0x99bbff, 0.85); keyLight.position.set(6, 10, 4); scene.add(keyLight);
+  const fillLight = new THREE.PointLight(0xff6699, 0.6, 30, 1.5); fillLight.position.set(-6, 3, -4); scene.add(fillLight);
 
-  const keyLight = new THREE.DirectionalLight(0x99bbff, 0.85);
-  keyLight.position.set(6, 10, 4); scene.add(keyLight);
-
-  const fillLight = new THREE.PointLight(0xff6699, 0.6, 30, 1.5);
-  fillLight.position.set(-6, 3, -4); scene.add(fillLight);
-
-  // Ground
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(200,200), new THREE.MeshStandardMaterial({ color: 0x1b2133, roughness:0.95, metalness:0.05 }));
   ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
 
-  // Props
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x20283f, roughness:0.9, metalness:0.05 });
   for (let i=0;i<10;i++){
     const h = 1.2+Math.random()*1.2;
@@ -446,16 +440,13 @@
     scene.add(w);
   }
 
-  // Sky
   const skyGeo = new THREE.SphereGeometry(800, 32, 16);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms: { top:{value:new THREE.Color('#102437')}, bottom:{value:new THREE.Color('#060b12')} },
     vertexShader: `varying vec3 vPos; void main(){ vPos=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-    fragmentShader: `
-      varying vec3 vPos; uniform vec3 top; uniform vec3 bottom;
-      void main(){ float h = normalize(vPos).y*0.5+0.5; vec3 c=mix(bottom, top, pow(h,1.5)); gl_FragColor=vec4(c,1.0); }
-    `
+    fragmentShader: `varying vec3 vPos; uniform vec3 top; uniform vec3 bottom;
+      void main(){ float h = normalize(vPos).y*0.5+0.5; vec3 c=mix(bottom, top, pow(h,1.5)); gl_FragColor=vec4(c,1.0); }`
   });
   scene.add(new THREE.Mesh(skyGeo, skyMat));
 
@@ -477,7 +468,6 @@
       target: { pos:new THREE.Vector3(), rotY:0, t:now() }
     });
   }
-
   function nameTagSprite(text) {
     const cnv = document.createElement('canvas'); cnv.width = 256; cnv.height=64;
     const ctx = cnv.getContext('2d');
@@ -507,11 +497,15 @@
   document.addEventListener('keyup', (e) => keys.delete(e.code));
 
   function requestPointerLock() {
+    $('#ui').classList.add('hidden');
+    $('#overlayPrompt').classList.add('hidden');
     canvas.requestPointerLock = canvas.requestPointerLock || canvas.webkitRequestPointerLock;
     if (canvas.requestPointerLock) canvas.requestPointerLock();
   }
   document.addEventListener('pointerlockchange', () => {
     pointerLocked = (document.pointerLockElement === canvas);
+    // Show P2P panel only when unlocked; hide while playing
+    $('#ui').classList.toggle('hidden', pointerLocked);
     $('#overlayPrompt').classList.toggle('hidden', pointerLocked);
   });
 
@@ -524,7 +518,6 @@
   });
 
   // ---------- Shooting ----------
-  const tmpV3 = new THREE.Vector3();
   const ray = new THREE.Raycaster();
   let lastShotAt = -Infinity;
   const shotCooldown = 140;
@@ -535,7 +528,6 @@
   });
 
   function getCameraDir() {
-    // Build direction using YXZ order
     return new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
   }
 
@@ -548,7 +540,7 @@
     const dir = getCameraDir();
     spawnTracer(origin, dir, 0x66ddff);
 
-    // Local hit detection against remote avatars
+    // Local hit test against remote avatars
     let hitId = null;
     let minDist = Infinity;
     for (const [pid, rp] of remotePlayers) {
@@ -557,19 +549,15 @@
       if (hit && hit.t < minDist) { minDist = hit.t; hitId = pid; }
     }
     if (hitId) {
-      // Announce a hit (victim will validate)
       const dmg = 25;
       broadcast({ t: MSG.HIT, fromId: myId, victimId: hitId, dmg });
     }
-
-    // Announce shot (for anti-cheat validation)
     broadcast({ t: MSG.SHOOT, id: myId, o: origin.toArray(), d: dir.toArray() });
   }
 
   function spawnTracer(originArrOrVec, dirArrOrVec, color=0xffffff) {
     const o = Array.isArray(originArrOrVec) ? new THREE.Vector3().fromArray(originArrOrVec) : originArrOrVec.clone();
     const d = Array.isArray(dirArrOrVec) ? new THREE.Vector3().fromArray(dirArrOrVec) : dirArrOrVec.clone();
-
     const len = 50;
     const end = o.clone().addScaledVector(d, len);
     const geom = new THREE.BufferGeometry().setFromPoints([o, end]);
@@ -586,7 +574,6 @@
   }
 
   function rayBoxIntersect(origin, dir, box) {
-    // Slab method
     let tmin = -Infinity, tmax = Infinity;
     for (const axis of ['x','y','z']) {
       const o = origin[axis], d = dir[axis];
@@ -604,7 +591,7 @@
     return { t: tmin>=0 ? tmin : tmax };
   }
 
-  // ---------- Player life ----------
+  // ---------- Player life + HUD ----------
   let health = 100;
   const spawnPoints = [
     new THREE.Vector3( 0,0, 8), new THREE.Vector3(8,0,0),
@@ -612,13 +599,14 @@
     new THREE.Vector3(12,0,12), new THREE.Vector3(-12,0,-12)
   ];
   function respawn() {
-    health = 100;
+    health = 100; updateHealthBar();
     const sp = spawnPoints[(Math.random()*spawnPoints.length)|0];
     camera.position.set(sp.x, 1.6, sp.z);
     vel.set(0,0,0);
   }
   function applyDamage(dmg=25) {
     health = Math.max(0, health - dmg);
+    updateHealthBar();
     if (health === 0) {
       flashScreen('#ff3355', 450);
       setTimeout(respawn, 600);
@@ -626,12 +614,27 @@
       flashScreen('#ff8899', 200);
     }
   }
+  function updateHealthBar() {
+    const fill = $('#healthFill');
+    const pct = clamp(health, 0, 100);
+    fill.style.width = pct + '%';
+    // Color shift: >60 green, >30 yellow, else red
+    if (pct > 60) {
+      fill.style.background = 'linear-gradient(90deg, #27d17c, #18b36a)';
+      fill.style.boxShadow = '0 0 6px rgba(39,209,124,0.6)';
+    } else if (pct > 30) {
+      fill.style.background = 'linear-gradient(90deg, #f0c330, #e3a317)';
+      fill.style.boxShadow = '0 0 6px rgba(240,195,48,0.6)';
+    } else {
+      fill.style.background = 'linear-gradient(90deg, #ff5a5a, #e63b3b)';
+      fill.style.boxShadow = '0 0 6px rgba(255,90,90,0.6)';
+    }
+  }
   function flashScreen(color, dur=350) {
     const div = document.createElement('div');
     div.style.position='fixed'; div.style.inset='0';
     div.style.background = color; div.style.opacity='0.15'; div.style.pointerEvents='none';
-    div.style.zIndex = '9';
-    document.body.appendChild(div);
+    div.style.zIndex = '9'; document.body.appendChild(div);
     const start = now();
     (function fade(){
       const t = (now()-start)/dur;
@@ -646,10 +649,7 @@
     ensureRemotePlayer(id);
     const rp = remotePlayers.get(id);
     rp.last = { ...rp.target };
-    rp.target = {
-      pos: new THREE.Vector3(st.p[0], st.p[1], st.p[2]),
-      rotY: st.r, t: now()
-    };
+    rp.target = { pos: new THREE.Vector3(st.p[0], st.p[1], st.p[2]), rotY: st.r, t: now() };
   }
 
   // ---------- Game loop ----------
@@ -664,15 +664,15 @@
     const jumpVel = 7.2;
     const sprintMult = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 1.6 : 1.0;
 
-    // Direction vectors based on yaw only (flat move), camera rotation uses pitch too
+    // Direction vectors: forward is -Z rotated by yaw; right is +X rotated by yaw (fixes A/D)
     const forward = new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(0, yaw, 0, 'YXZ'));
-    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).negate();
+    const right = new THREE.Vector3(1,0,0).applyEuler(new THREE.Euler(0, yaw, 0, 'YXZ'));
 
     let wish = new THREE.Vector3();
     if (keys.has('KeyW')) wish.add(forward);
     if (keys.has('KeyS')) wish.add(forward.clone().negate());
-    if (keys.has('KeyA')) wish.add(right.clone().negate());
-    if (keys.has('KeyD')) wish.add(right);
+    if (keys.has('KeyA')) wish.add(right.clone().negate()); // A = left
+    if (keys.has('KeyD')) wish.add(right);                  // D = right
     if (wish.lengthSq()>0) wish.normalize();
 
     const onGround = (camera.position.y <= 1.6 + onGroundEpsilon);
@@ -712,7 +712,8 @@
     if (netAccumulator >= (1/15)) {
       netAccumulator = 0;
       broadcast({ t: MSG.STATE, id: myId, st: { p: camera.position.toArray(), r: yaw } });
-      pingAll();
+      // lightweight ping
+      for (const [,p] of peers) send(p.dc, { t: MSG.PING, n: now() });
     }
 
     // Interpolate remote players
@@ -750,10 +751,9 @@
   window.addEventListener('resize', onResize);
 
   // ---------- UI wiring ----------
-  $('#btnCreateOffer').onclick = createOffer;
-  $('#btnAcceptOffer').onclick = acceptOfferCreateAnswer;
-  $('#btnAcceptAnswer').onclick = acceptAnswer;
-  $('#btnClearPeers').onclick = disconnectAll;
+  $('#btnCreateInvite').onclick = createInvite;
+  $('#btnPasteCode').onclick = pasteCode;
+  $('#btnDisconnect').onclick = disconnectAll;
   $('#nameInput').addEventListener('change', () => { myName = $('#nameInput').value.trim(); });
 
   function updateStats() {
@@ -775,12 +775,22 @@
   setInterval(updateStats, 500);
 
   // ---------- Start ----------
+  updateHealthBar();
   respawn();
   frame();
 
   // ---------- Helpers ----------
-  // Expose to avoid accidental tree-shaking
-  window.__p2p_fps = { peers, ac, flaggedPeers };
+  function showFlag(text) {
+    const el = $('#flagBanner');
+    el.textContent = text; el.style.display = 'block'; el.style.opacity = '1';
+    const start = now();
+    (function fade(){
+      const t = (now()-start)/3000;
+      if (t >= 1) { el.style.display = 'none'; return; }
+      el.style.opacity = String(1 - t);
+      requestAnimationFrame(fade);
+    })();
+  }
 
 })();
 </script>
