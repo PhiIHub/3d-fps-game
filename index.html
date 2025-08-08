@@ -2,31 +2,37 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>P2P FPS Prototype</title>
+<title>P2P FPS Prototype — Decentralized + Anti-Cheat</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
-  html, body { margin:0; padding:0; height:100%; background:#0b0e14; color:#e6e6e6; font-family:system-ui, sans-serif; }
+  html, body { margin:0; padding:0; height:100%; background:#0b0e14; color:#e6e6e6; font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; }
   #ui {
-    position: fixed; top: 10px; left: 10px; width: 360px; max-width: 92vw;
-    background: rgba(8,10,16,0.8); border: 1px solid #222; border-radius: 10px; padding: 12px; backdrop-filter: blur(6px);
+    position: fixed; top: 10px; left: 10px; width: 380px; max-width: 92vw;
+    background: rgba(8,10,16,0.85); border: 1px solid #222; border-radius: 12px; padding: 12px; backdrop-filter: blur(6px);
+    z-index: 10;
   }
-  #ui h2 { margin: 0 0 8px 0; font-size: 16px; font-weight: 700; }
+  #ui h2 { margin: 0 0 8px 0; font-size: 16px; font-weight: 800; letter-spacing: 0.2px; }
   #ui .row { display: flex; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
   #ui button, #ui textarea, #ui input {
-    font: inherit; border-radius: 8px; border: 1px solid #333; background:#121522; color:#e6e6e6; padding:8px;
+    font: inherit; border-radius: 10px; border: 1px solid #2b3148; background:#121522; color:#e6e6e6; padding:9px 10px;
   }
   #ui button { cursor:pointer; background: linear-gradient(180deg, #1f2436, #121522); }
-  #ui button:hover { filter: brightness(1.1); }
-  #localOffer, #remoteSDP { width:100%; height: 80px; }
-  #stats { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.3; }
-  #hints { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.3; }
+  #ui button:hover { filter: brightness(1.07); }
+  #localOffer, #remoteSDP { width:100%; height: 84px; resize: vertical; }
+  #stats { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.35; white-space: pre-wrap; }
+  #hints { font-size: 12px; opacity: 0.9; margin-top: 6px; line-height: 1.35; }
+  .pill { display:inline-block; padding: 4px 8px; border:1px solid #2a2f45; border-radius:999px; background:#111423; margin: 3px; }
   #overlayPrompt {
     position: fixed; inset: 0; display:flex; align-items:center; justify-content:center;
     background: radial-gradient(ellipse at center, rgba(5,8,13,0.8) 0, rgba(5,8,13,0.95) 60%, rgba(5,8,13,1) 100%);
-    color:#dce2ff; font-weight:600; letter-spacing:0.3px; text-align:center;
+    color:#dce2ff; font-weight:700; letter-spacing:0.3px; text-align:center; z-index: 5;
   }
   #overlayPrompt.hidden { display:none; }
-  .pill { display:inline-block; padding: 4px 8px; border:1px solid #2a2f45; border-radius:999px; background:#111423; margin: 3px; }
+  #flagBanner {
+    position: fixed; right: 10px; top: 10px; z-index: 10;
+    padding: 8px 10px; border-radius: 10px; background: rgba(255,60,100,0.1); border: 1px solid rgba(255,60,100,0.25);
+    font-size: 12px; max-width: 320px;
+  }
   canvas { display:block; width:100%; height:100%; }
 </style>
 </head>
@@ -39,7 +45,7 @@
     <button id="btnAcceptAnswer">Accept Answer</button>
   </div>
   <div class="row">
-    <textarea id="localOffer" placeholder="Local Offer (copy me)"></textarea>
+    <textarea id="localOffer" placeholder="Local Offer/Answer (copy me)"></textarea>
   </div>
   <div class="row">
     <textarea id="remoteSDP" placeholder="Paste remote offer/answer here"></textarea>
@@ -51,25 +57,27 @@
   <div id="hints">
     Controls:
     <span class="pill">Enter: Lock pointer</span>
+    <span class="pill">Esc: Unlock pointer (interact with UI)</span>
     <span class="pill">WASD: Move</span>
     <span class="pill">Space: Jump</span>
     <span class="pill">Shift: Sprint</span>
     <span class="pill">Click: Shoot</span>
-    <span class="pill">Esc: Release pointer</span>
   </div>
   <div id="stats"></div>
 </div>
 
+<div id="flagBanner" style="display:none;"></div>
+
 <div id="overlayPrompt">
   <div>
-    <div style="font-size:22px; margin-bottom:8px;">Click anywhere, then press Enter to start</div>
-    <div style="opacity:0.8;">Open this file in multiple tabs/machines and connect via the UI</div>
+    <div style="font-size:22px; margin-bottom:8px;">Click the canvas, then press Enter to start</div>
+    <div style="opacity:0.8;">Press Esc any time to free the cursor and use the UI</div>
   </div>
 </div>
 
 <canvas id="c"></canvas>
 
-<!-- Three.js core -->
+<!-- Three.js -->
 <script src="https://unpkg.com/three@0.157.0/build/three.min.js"></script>
 
 <script>
@@ -78,8 +86,8 @@
   const $ = sel => document.querySelector(sel);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a,b,t) => a+(b-a)*t;
-  const randId = () => Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b=>b.toString(16).padStart(2,'0')).join('');
   const now = () => performance.now();
+  const randId = () => Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b=>b.toString(16).padStart(2,'0')).join('');
   function hashColorFromId(id) {
     let h=0; for (let i=0;i<id.length;i++) h = (h*131 + id.charCodeAt(i))>>>0;
     const hue = h % 360; const sat = 60 + (h>>>10)%30; const light = 45 + (h>>>20)%10;
@@ -88,12 +96,15 @@
   function encode(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); }
   function decode(str){ return JSON.parse(decodeURIComponent(escape(atob(str)))); }
 
-  // ---------- Networking (WebRTC P2P) ----------
-  const iceServers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] }];
-  const peers = new Map(); // id => { pc, dc, remoteDescSet, lastPing, rttMs, name, color, isOpen }
+  // ---------- IDs / Names ----------
   const myId = randId();
   let myName = '';
   const myColor = hashColorFromId(myId).getHexString();
+
+  // ---------- Networking (WebRTC P2P mesh) ----------
+  const iceServers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] }];
+  // peers map: peerKey or peerId -> { pc?, dc?, name?, color?, lastMsgTs?, rttMs?, remoteDescSet?, isOpen? }
+  const peers = new Map();
 
   const MSG = {
     HELLO: 'hello',
@@ -102,11 +113,12 @@
     HIT:   'hit',
     PING:  'ping',
     PONG:  'pong',
+    FLAG:  'flag' // anti-cheat broadcast
   };
 
   function newPeerConnection() {
     const pc = new RTCPeerConnection({ iceServers });
-    pc.onconnectionstatechange = () => updateStats();
+    pc.onconnectionstatechange = updateStats;
     return pc;
   }
 
@@ -118,67 +130,12 @@
 
   function wireDataChannel(dc) {
     dc.onopen = () => {
-      // greet
       send(dc, { t: MSG.HELLO, id: myId, name: myName, color: myColor });
       updateStats();
     };
     dc.onmessage = ev => onMessage(dc, ev.data);
-    dc.onclose = () => updateStats();
-    dc.onerror = () => updateStats();
-  }
-
-  function onMessage(dc, data) {
-    try {
-      const msg = JSON.parse(data);
-      switch (msg.t) {
-        case MSG.HELLO: {
-          const pid = msg.id;
-          let p = peers.get(pid);
-          if (!p) {
-            // We don't auto-create RTCPeerConnection on inbound hello; we only maintain DC info.
-            p = { pc: null, dc, remoteDescSet:true, name: msg.name||'', color: msg.color||'ffffff', isOpen: true, lastMsgTs: now() };
-            peers.set(pid, p);
-          } else {
-            p.dc = dc; p.name = msg.name||p.name; p.color = msg.color||p.color; p.isOpen = true; p.lastMsgTs = now();
-          }
-          ensureRemotePlayer(pid, p.name, p.color);
-          broadcastExcept(dc, msg); // naive re-broadcast to help converge state
-          break;
-        }
-        case MSG.STATE: {
-          const pid = msg.id; const st = msg.st;
-          const p = peers.get(pid) || { pc:null, dc, name:'', color: msg.color||'ffffff', isOpen: true };
-          peers.set(pid, p);
-          p.lastMsgTs = now();
-          upsertRemoteState(pid, st);
-          break;
-        }
-        case MSG.SHOOT: {
-          const pid = msg.id;
-          spawnTracer(msg.o, msg.d, 0xff5555);
-          // Optional: client-side hit detection for received shots (trust-based)
-          processIncomingShot(pid, msg.o, msg.d);
-          broadcastExcept(dc, msg);
-          break;
-        }
-        case MSG.HIT: {
-          const { victimId, dmg } = msg;
-          if (victimId === myId) applyDamage(dmg);
-          broadcastExcept(dc, msg);
-          break;
-        }
-        case MSG.PING: {
-          // echo
-          send(dc, { t: MSG.PONG, n: msg.n });
-          break;
-        }
-        case MSG.PONG: {
-          const rtt = now() - msg.n;
-          for (const [pid, p] of peers) if (p.dc === dc) { p.rttMs = rtt|0; p.lastMsgTs = now(); break; }
-          break;
-        }
-      }
-    } catch(e) { console.warn('bad message', e); }
+    dc.onclose = updateStats;
+    dc.onerror = updateStats;
   }
 
   function send(dc, obj) {
@@ -194,18 +151,12 @@
   async function createOffer() {
     const pc = newPeerConnection();
     const dc = createDataChannel(pc);
-    const local = { pc, dc, remoteDescSet:false, isOpen:false };
-    const key = randId(); // temporary key for this handshake
-    peers.set(key, local);
+    const key = randId();
+    peers.set(key, { pc, dc, remoteDescSet:false, isOpen:false });
 
-    pc.onicegatheringstatechange = async () => {
+    pc.onicegatheringstatechange = () => {
       if (pc.iceGatheringState === 'complete') {
         $('#localOffer').value = encode({ type:'offer', sdp: pc.localDescription.sdp });
-      }
-    };
-    pc.onicecandidate = (ev) => {
-      if (!ev.candidate) {
-        // finalize
       }
     };
 
@@ -214,8 +165,7 @@
   }
 
   async function acceptOfferCreateAnswer() {
-    const blob = $('#remoteSDP').value.trim();
-    if (!blob) return;
+    const blob = $('#remoteSDP').value.trim(); if (!blob) return;
     const remote = decode(blob);
     if (remote.type !== 'offer' || !remote.sdp) return;
 
@@ -234,21 +184,19 @@
   }
 
   async function acceptAnswer() {
-    const blob = $('#remoteSDP').value.trim();
-    if (!blob) return;
+    const blob = $('#remoteSDP').value.trim(); if (!blob) return;
     const remote = decode(blob);
     if (remote.type !== 'answer' || !remote.sdp) return;
 
-    // Find the one pending offer PC (the one with DC we created)
-    let pending = null;
+    // Find pending local offer
     for (const [k,p] of peers) {
-      if (p.pc && !p.remoteDescSet) { pending = { key:k, p }; break; }
+      if (p.pc && !p.remoteDescSet) {
+        await p.pc.setRemoteDescription({ type:'answer', sdp: remote.sdp });
+        p.remoteDescSet = true;
+        updateStats();
+        break;
+      }
     }
-    if (!pending) return;
-
-    await pending.p.pc.setRemoteDescription({ type:'answer', sdp: remote.sdp });
-    pending.p.remoteDescSet = true;
-    updateStats();
   }
 
   function pingAll() {
@@ -257,15 +205,213 @@
   }
 
   function disconnectAll() {
-    for (const [,p] of peers) {
-      try { p.dc && p.dc.close(); } catch {}
-      try { p.pc && p.pc.close(); } catch {}
-    }
+    for (const [,p] of peers) { try { p.dc && p.dc.close(); } catch{} try { p.pc && p.pc.close(); } catch{} }
     peers.clear();
-    // Keep remote avatars but mark as stale; they will time out
+    updateStats();
   }
 
-  // ---------- 3D Scene / Controls ----------
+  // ---------- Anti-cheat (decentralized, trust-based) ----------
+  // Per-sender tracking: state freshness, shot history, hit rates, flags
+  const ac = new Map(); // senderId -> { lastStateAt:ms, shots:[{t,o:[],d:[]}], hitTimes:[], rejects:[], flagged:false, trust:1 }
+
+  // Self position history for rewind validation
+  const selfHistory = []; // {t, p:THREE.Vector3}
+  const SELF_HISTORY_MS = 2500;
+
+  // Flag propagation
+  const flaggedPeers = new Set();
+  function ensureAC(senderId) {
+    if (!ac.has(senderId)) ac.set(senderId, { lastStateAt: 0, shots: [], hitTimes: [], rejects: [], flagged: false, trust: 1 });
+    return ac.get(senderId);
+  }
+  function recordReject(senderId, reason) {
+    const e = ensureAC(senderId);
+    e.rejects.push({ t: now(), reason });
+    // Clean recent window
+    const cutoff = now() - 5000;
+    e.rejects = e.rejects.filter(x => x.t >= cutoff);
+    if (!e.flagged) {
+      const recentRejects = e.rejects.length;
+      if (recentRejects >= 3) {
+        e.flagged = true; flaggedPeers.add(senderId);
+        broadcast({ t: MSG.FLAG, id: senderId, why: reason });
+        showFlag(`${labelFor(senderId)} flagged: ${reason}`);
+      }
+    }
+  }
+  function recordHitRate(senderId) {
+    const e = ensureAC(senderId);
+    const t = now();
+    e.hitTimes.push(t);
+    const cutoff = t - 1000;
+    e.hitTimes = e.hitTimes.filter(x => x >= cutoff);
+    if (e.hitTimes.length > 4) {
+      recordReject(senderId, 'rate-limit');
+      return false;
+    }
+    return true;
+  }
+  function recordShot(senderId, o, d) {
+    const e = ensureAC(senderId);
+    const t = now();
+    e.shots.push({ t, o, d });
+    const cutoff = t - 1200;
+    e.shots = e.shots.filter(s => s.t >= cutoff);
+  }
+  function lastRecentShot(senderId, windowMs = 400) {
+    const e = ensureAC(senderId);
+    const t = now();
+    for (let i=e.shots.length-1; i>=0; i--) {
+      const s = e.shots[i];
+      if (t - s.t <= windowMs) return s;
+    }
+    return null;
+  }
+  function setLastState(senderId) {
+    ensureAC(senderId).lastStateAt = now();
+  }
+  function isStateFresh(senderId, maxMs = 2500) {
+    return (now() - ensureAC(senderId).lastStateAt) <= maxMs;
+  }
+
+  // Validation: victim side
+  function validateIncomingHit(fromId, dmg) {
+    // Basic sanity
+    if (flaggedPeers.has(fromId)) return { ok:false, reason:'sender-flagged' };
+    if (!(dmg >= 1 && dmg <= 100)) return { ok:false, reason:'bad-damage' };
+    if (!isStateFresh(fromId)) return { ok:false, reason:'stale-state' };
+    if (!recordHitRate(fromId)) return { ok:false, reason:'rate-limit' };
+
+    const shot = lastRecentShot(fromId, 450);
+    if (!shot) return { ok:false, reason:'no-recent-shot' };
+
+    // Rewind to closest self position near shot time
+    const target = closestHistory(shot.t);
+    if (!target) return { ok:false, reason:'no-self-history' };
+
+    // Approximate body as a standing box around target position
+    const pos = target.p;
+    const half = new THREE.Vector3(0.25, 0.85, 0.25);
+    const min = pos.clone().add(new THREE.Vector3(-half.x, 0.0, -half.z));
+    const max = pos.clone().add(new THREE.Vector3( half.x, 2*half.y,  half.z));
+    const box = new THREE.Box3(min, max);
+
+    const hit = rayBoxIntersect(new THREE.Vector3().fromArray(shot.o), new THREE.Vector3().fromArray(shot.d), box);
+    if (!hit) return { ok:false, reason:'no-intersection' };
+
+    // Optional: max distance check
+    if (hit.t > 60) return { ok:false, reason:'too-far' };
+
+    return { ok:true };
+  }
+
+  function closestHistory(tShot) {
+    if (selfHistory.length === 0) return null;
+    let best = selfHistory[0], bestDt = Math.abs(best.t - tShot);
+    for (let i=1;i<selfHistory.length;i++) {
+      const d = Math.abs(selfHistory[i].t - tShot);
+      if (d < bestDt) { best = selfHistory[i]; bestDt = d; }
+    }
+    return best;
+  }
+
+  function showFlag(text) {
+    const el = $('#flagBanner');
+    el.textContent = text;
+    el.style.display = 'block';
+    const start = now();
+    (function fade(){
+      const t = (now()-start)/3000;
+      if (t >= 1) { el.style.display = 'none'; return; }
+      el.style.opacity = String(1 - t);
+      requestAnimationFrame(fade);
+    })();
+  }
+
+  // ---------- Messages ----------
+  function onMessage(dc, data) {
+    try {
+      const msg = JSON.parse(data);
+      switch (msg.t) {
+        case MSG.HELLO: {
+          const pid = msg.id;
+          let p = peers.get(pid);
+          if (!p) {
+            p = { pc: null, dc, name: msg.name||'', color: msg.color||'ffffff', isOpen: true, lastMsgTs: now() };
+            peers.set(pid, p);
+          } else {
+            p.dc = dc; p.name = msg.name||p.name; p.color = msg.color||p.color; p.isOpen = true; p.lastMsgTs = now();
+          }
+          ensureRemotePlayer(pid, p.name, p.color);
+          broadcastExcept(dc, msg); // naive gossip
+          updateStats();
+          break;
+        }
+        case MSG.STATE: {
+          const pid = msg.id, st = msg.st;
+          const p = peers.get(pid) || { pc:null, dc, name:'', color: msg.color||'ffffff', isOpen:true };
+          peers.set(pid, p);
+          p.lastMsgTs = now();
+          setLastState(pid);
+          upsertRemoteState(pid, st);
+          break;
+        }
+        case MSG.SHOOT: {
+          const pid = msg.id;
+          recordShot(pid, msg.o, msg.d);
+          spawnTracer(msg.o, msg.d, 0xff6666);
+          broadcastExcept(dc, msg); // gossip
+          break;
+        }
+        case MSG.HIT: {
+          const { fromId, victimId, dmg } = msg;
+          if (victimId === myId) {
+            const res = validateIncomingHit(fromId, dmg);
+            if (res.ok) {
+              applyDamage(dmg);
+              // Re-broadcast accepted hit (so late joiners converge)
+              broadcastExcept(dc, msg);
+            } else {
+              recordReject(fromId, res.reason);
+            }
+          } else {
+            // If sender is flagged, don't gossip further
+            if (!flaggedPeers.has(fromId)) {
+              broadcastExcept(dc, msg);
+            }
+          }
+          break;
+        }
+        case MSG.PING: {
+          send(dc, { t: MSG.PONG, n: msg.n });
+          break;
+        }
+        case MSG.PONG: {
+          const rtt = now() - msg.n;
+          for (const [pid, p] of peers) if (p.dc === dc) { p.rttMs = rtt|0; p.lastMsgTs = now(); break; }
+          break;
+        }
+        case MSG.FLAG: {
+          const id = msg.id;
+          if (!flaggedPeers.has(id)) {
+            flaggedPeers.add(id);
+            const e = ensureAC(id);
+            e.flagged = true;
+            showFlag(`${labelFor(id)} flagged via gossip (${msg.why||'suspicious'})`);
+            updateStats();
+          }
+          break;
+        }
+      }
+    } catch(e) { console.warn('bad message', e); }
+  }
+
+  function labelFor(id) {
+    const p = peers.get(id);
+    return p && p.name ? p.name : (id ? id.slice(0,6) : 'peer');
+  }
+
+  // ---------- 3D Scene ----------
   const canvas = $('#c');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, powerPreference:'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -276,72 +422,53 @@
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
   camera.position.set(0, 1.6, 5);
+  camera.rotation.order = 'YXZ'; // proper FPS: yaw around Y, then pitch around X
 
   const ambient = new THREE.AmbientLight(0x556677, 0.4);
   scene.add(ambient);
 
-  const keyLight = new THREE.DirectionalLight(0x99bbff, 0.8);
-  keyLight.position.set(6, 10, 4);
-  scene.add(keyLight);
+  const keyLight = new THREE.DirectionalLight(0x99bbff, 0.85);
+  keyLight.position.set(6, 10, 4); scene.add(keyLight);
 
-  const fillLight = new THREE.PointLight(0xff6699, 0.5, 30, 1.5);
-  fillLight.position.set(-6, 3, -4);
-  scene.add(fillLight);
+  const fillLight = new THREE.PointLight(0xff6699, 0.6, 30, 1.5);
+  fillLight.position.set(-6, 3, -4); scene.add(fillLight);
 
   // Ground
-  const groundGeo = new THREE.PlaneGeometry(200,200,1,1);
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x1b2133, roughness:0.95, metalness:0.05 });
-  const ground = new THREE.Mesh(groundGeo, groundMat);
-  ground.rotation.x = -Math.PI/2;
-  ground.receiveShadow = true;
-  scene.add(ground);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(200,200), new THREE.MeshStandardMaterial({ color: 0x1b2133, roughness:0.95, metalness:0.05 }));
+  ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
 
-  // Some walls/boxes
+  // Props
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x20283f, roughness:0.9, metalness:0.05 });
   for (let i=0;i<10;i++){
-    const w = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2+Math.random()*1.2, 1.2), wallMat);
-    w.position.set((Math.random()-0.5)*30, w.geometry.parameters.height/2, (Math.random()-0.5)*30);
+    const h = 1.2+Math.random()*1.2;
+    const w = new THREE.Mesh(new THREE.BoxGeometry(1.2,h,1.2), wallMat);
+    w.position.set((Math.random()-0.5)*30, h/2, (Math.random()-0.5)*30);
     scene.add(w);
   }
 
-  // Sky gradient (big inverted sphere)
+  // Sky
   const skyGeo = new THREE.SphereGeometry(800, 32, 16);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms: { top:{value:new THREE.Color('#102437')}, bottom:{value:new THREE.Color('#060b12')} },
-    vertexShader: `
-      varying vec3 vPos;
-      void main() {
-        vPos = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-      }
-    `,
+    vertexShader: `varying vec3 vPos; void main(){ vPos=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
     fragmentShader: `
-      varying vec3 vPos;
-      uniform vec3 top; uniform vec3 bottom;
-      void main(){
-        float h = normalize(vPos).y * 0.5 + 0.5;
-        vec3 c = mix(bottom, top, pow(h, 1.5));
-        gl_FragColor = vec4(c,1.0);
-      }
+      varying vec3 vPos; uniform vec3 top; uniform vec3 bottom;
+      void main(){ float h = normalize(vPos).y*0.5+0.5; vec3 c=mix(bottom, top, pow(h,1.5)); gl_FragColor=vec4(c,1.0); }
     `
   });
   scene.add(new THREE.Mesh(skyGeo, skyMat));
 
-  // Player avatar (for local we don't render body; remote players are boxes)
-  const remotePlayers = new Map(); // id => { mesh, name, color, last, target }
+  // Remote avatars
+  const remotePlayers = new Map(); // id -> { mesh, name, color, last, target }
   function ensureRemotePlayer(id, name='', colorHex='ffffff') {
-    if (id === myId) return;
-    if (remotePlayers.has(id)) return;
+    if (id === myId || remotePlayers.has(id)) return;
     const mat = new THREE.MeshStandardMaterial({ color: parseInt(colorHex,16), roughness:0.6, metalness:0.2 });
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.5,1.7,0.5), mat);
-    mesh.position.set(0, 0.85, 0);
-    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.position.set(0, 0.85, 0); mesh.castShadow = true; mesh.receiveShadow = true;
 
-    // name tag
     const sprite = nameTagSprite(name || id.slice(0,6));
-    sprite.position.set(0, 1.6, 0);
-    mesh.add(sprite);
+    sprite.position.set(0, 1.6, 0); mesh.add(sprite);
 
     scene.add(mesh);
     remotePlayers.set(id, {
@@ -356,31 +483,29 @@
     const ctx = cnv.getContext('2d');
     ctx.fillStyle='rgba(10,12,20,0.6)'; ctx.fillRect(0,0,cnv.width,cnv.height);
     ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.strokeRect(0,0,cnv.width,cnv.height);
-    ctx.font='24px system-ui';
-    ctx.fillStyle='#e6e6e6'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font='24px system-ui'; ctx.fillStyle='#e6e6e6'; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(text, cnv.width/2, cnv.height/2);
-    const tex = new THREE.CanvasTexture(cnv);
-    tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+    const tex = new THREE.CanvasTexture(cnv); tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter;
     const mat = new THREE.SpriteMaterial({ map: tex, depthWrite:false, depthTest:true, transparent:true });
-    const spr = new THREE.Sprite(mat); spr.scale.set(1.3, 0.33, 1);
-    return spr;
+    const spr = new THREE.Sprite(mat); spr.scale.set(1.3, 0.33, 1); return spr;
   }
 
-  // Simple pointer-lock FPS controls
+  // ---------- Controls ----------
   const keys = new Set();
   let pointerLocked = false;
   let yaw = 0, pitch = 0;
   let vel = new THREE.Vector3(0,0,0);
-  const onGroundEpsilon = 0.06;
   let wantsJump = false;
+  const onGroundEpsilon = 0.06;
 
-  document.addEventListener('click', () => { /* allow audio later */ });
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Enter' && !pointerLocked) requestPointerLock();
+    if (e.code === 'Escape' && pointerLocked) { try { document.exitPointerLock(); } catch{} }
     keys.add(e.code);
     if (e.code === 'Space') wantsJump = true;
   });
   document.addEventListener('keyup', (e) => keys.delete(e.code));
+
   function requestPointerLock() {
     canvas.requestPointerLock = canvas.requestPointerLock || canvas.webkitRequestPointerLock;
     if (canvas.requestPointerLock) canvas.requestPointerLock();
@@ -389,24 +514,30 @@
     pointerLocked = (document.pointerLockElement === canvas);
     $('#overlayPrompt').classList.toggle('hidden', pointerLocked);
   });
+
   document.addEventListener('mousemove', (e) => {
     if (!pointerLocked) return;
     const sens = 0.0025;
     yaw -= e.movementX * sens;
     pitch -= e.movementY * sens;
-    pitch = clamp(pitch, -Math.PI/2+0.001, Math.PI/2-0.001);
+    pitch = clamp(pitch, -Math.PI/2 + 0.01, Math.PI/2 - 0.01);
   });
 
-  // Shooting
-  const ray = new THREE.Raycaster();
+  // ---------- Shooting ----------
   const tmpV3 = new THREE.Vector3();
+  const ray = new THREE.Raycaster();
   let lastShotAt = -Infinity;
-  const shotCooldown = 140; // ms
+  const shotCooldown = 140;
 
-  canvas.addEventListener('mousedown', (e) => {
+  canvas.addEventListener('mousedown', () => {
     if (!pointerLocked) return;
     tryShoot();
   });
+
+  function getCameraDir() {
+    // Build direction using YXZ order
+    return new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+  }
 
   function tryShoot() {
     const t = now();
@@ -414,10 +545,10 @@
     lastShotAt = t;
 
     const origin = camera.position.clone();
-    const dir = new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch, yaw, 0));
+    const dir = getCameraDir();
     spawnTracer(origin, dir, 0x66ddff);
 
-    // Client-side hit detection for remote players (trust-based demo)
+    // Local hit detection against remote avatars
     let hitId = null;
     let minDist = Infinity;
     for (const [pid, rp] of remotePlayers) {
@@ -426,16 +557,13 @@
       if (hit && hit.t < minDist) { minDist = hit.t; hitId = pid; }
     }
     if (hitId) {
-      broadcast({ t: MSG.HIT, victimId: hitId, dmg: 25 });
+      // Announce a hit (victim will validate)
+      const dmg = 25;
+      broadcast({ t: MSG.HIT, fromId: myId, victimId: hitId, dmg });
     }
 
+    // Announce shot (for anti-cheat validation)
     broadcast({ t: MSG.SHOOT, id: myId, o: origin.toArray(), d: dir.toArray() });
-  }
-
-  function processIncomingShot(fromId, originArr, dirArr) {
-    // You could implement authority rules or lag compensation here.
-    // For now, trust shooter and show tracer:
-    // (Already spawned in onMessage to visualize)
   }
 
   function spawnTracer(originArrOrVec, dirArrOrVec, color=0xffffff) {
@@ -448,7 +576,6 @@
     const mat = new THREE.LineBasicMaterial({ color, transparent:true, opacity:0.8 });
     const line = new THREE.Line(geom, mat);
     scene.add(line);
-    // fade out
     const start = now();
     (function fade(){
       const t = (now()-start)/300;
@@ -459,7 +586,7 @@
   }
 
   function rayBoxIntersect(origin, dir, box) {
-    // slab method
+    // Slab method
     let tmin = -Infinity, tmax = Infinity;
     for (const axis of ['x','y','z']) {
       const o = origin[axis], d = dir[axis];
@@ -477,12 +604,12 @@
     return { t: tmin>=0 ? tmin : tmax };
   }
 
-  // Health / respawn
+  // ---------- Player life ----------
   let health = 100;
   const spawnPoints = [
     new THREE.Vector3( 0,0, 8), new THREE.Vector3(8,0,0),
     new THREE.Vector3(-8,0, 0), new THREE.Vector3(0,0,-8),
-    new THREE.Vector3(12,0, 12), new THREE.Vector3(-12,0,-12)
+    new THREE.Vector3(12,0,12), new THREE.Vector3(-12,0,-12)
   ];
   function respawn() {
     health = 100;
@@ -493,8 +620,7 @@
   function applyDamage(dmg=25) {
     health = Math.max(0, health - dmg);
     if (health === 0) {
-      // tiny effect
-      flashScreen('#ff3355');
+      flashScreen('#ff3355', 450);
       setTimeout(respawn, 600);
     } else {
       flashScreen('#ff8899', 200);
@@ -504,6 +630,7 @@
     const div = document.createElement('div');
     div.style.position='fixed'; div.style.inset='0';
     div.style.background = color; div.style.opacity='0.15'; div.style.pointerEvents='none';
+    div.style.zIndex = '9';
     document.body.appendChild(div);
     const start = now();
     (function fade(){
@@ -514,7 +641,7 @@
     })();
   }
 
-  // Remote state smoothing
+  // ---------- Remote state smoothing ----------
   function upsertRemoteState(id, st) {
     ensureRemotePlayer(id);
     const rp = remotePlayers.get(id);
@@ -525,19 +652,20 @@
     };
   }
 
-  // ---------- Game Loop ----------
+  // ---------- Game loop ----------
   let lastTick = now();
+  let netAccumulator = 0;
 
   function update(dt) {
-    // Move
+    // Movement params
     const accel = 28;
     const friction = 8;
     const gravity = 30;
     const jumpVel = 7.2;
-    const sprint = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1.6 : 1.0;
+    const sprintMult = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 1.6 : 1.0;
 
-    // orientation
-    const forward = new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(0, yaw, 0));
+    // Direction vectors based on yaw only (flat move), camera rotation uses pitch too
+    const forward = new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(0, yaw, 0, 'YXZ'));
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).negate();
 
     let wish = new THREE.Vector3();
@@ -548,17 +676,17 @@
     if (wish.lengthSq()>0) wish.normalize();
 
     const onGround = (camera.position.y <= 1.6 + onGroundEpsilon);
-    // Horizontal accel
-    const desired = wish.multiplyScalar(accel * sprint);
+
+    // Horizontal acceleration
+    const desired = wish.multiplyScalar(accel * sprintMult);
     vel.x = lerp(vel.x, desired.x, dt*5);
     vel.z = lerp(vel.z, desired.z, dt*5);
 
-    // Gravity & jump
+    // Gravity / Jump
     if (onGround) {
       camera.position.y = 1.6;
       vel.y = Math.max(0, vel.y);
       if (wantsJump) { vel.y = jumpVel; wantsJump = false; }
-      // friction on ground
       vel.x = lerp(vel.x, 0, dt*friction);
       vel.z = lerp(vel.z, 0, dt*friction);
     } else {
@@ -567,45 +695,43 @@
 
     // Integrate
     camera.position.addScaledVector(vel, dt);
-
-    // Simple ground collision
     if (camera.position.y < 1.6) camera.position.y = 1.6;
 
-    // Apply orientation
-    camera.rotation.set(pitch, yaw, 0);
+    // Apply camera orientation (YXZ)
+    camera.rotation.x = pitch;
+    camera.rotation.y = yaw;
+    camera.rotation.z = 0;
 
-    // Broadcast our state at ~15 Hz
+    // Record self history for anti-cheat rewind
+    selfHistory.push({ t: now(), p: camera.position.clone() });
+    const cutoff = now() - SELF_HISTORY_MS;
+    while (selfHistory.length && selfHistory[0].t < cutoff) selfHistory.shift();
+
+    // Broadcast our state ~15 Hz
     netAccumulator += dt;
     if (netAccumulator >= (1/15)) {
       netAccumulator = 0;
-      broadcast({
-        t: MSG.STATE, id: myId,
-        st: { p: camera.position.toArray(), r: yaw }
-      });
+      broadcast({ t: MSG.STATE, id: myId, st: { p: camera.position.toArray(), r: yaw } });
       pingAll();
     }
 
     // Interpolate remote players
     for (const [id, rp] of remotePlayers) {
       const s = rp.mesh;
-      // interp by small factor towards target
       s.position.lerp(rp.target.pos, clamp(dt*8, 0, 1));
-      // rotate only around Y
       s.rotation.y = lerp(s.rotation.y, rp.target.rotY, clamp(dt*8, 0, 1));
     }
 
-    // Cull stale peers (no messages in > 10s)
-    const cutoff = now() - 10000;
+    // Cull stale peers (no messages in > 12s)
+    const staleCut = now() - 12000;
     for (const [pid, p] of peers) {
-      if (p.lastMsgTs && p.lastMsgTs < cutoff) {
+      if (p.lastMsgTs && p.lastMsgTs < staleCut) {
         try { p.dc && p.dc.close(); } catch{}
         try { p.pc && p.pc.close(); } catch{}
         peers.delete(pid);
       }
     }
   }
-
-  let netAccumulator = 0;
 
   function frame() {
     const t = now();
@@ -628,36 +754,34 @@
   $('#btnAcceptOffer').onclick = acceptOfferCreateAnswer;
   $('#btnAcceptAnswer').onclick = acceptAnswer;
   $('#btnClearPeers').onclick = disconnectAll;
-  $('#nameInput').addEventListener('change', () => {
-    myName = $('#nameInput').value.trim();
-  });
+  $('#nameInput').addEventListener('change', () => { myName = $('#nameInput').value.trim(); });
 
   function updateStats() {
-    let lines = [];
+    const lines = [];
     let open = 0;
-    for (const [pid, p] of peers) {
-      const dc = p.dc;
-      if (dc && dc.readyState === 'open') open++;
-    }
-    lines.push(`Your ID: ${myId.slice(0,8)}  |  Health: ${health}`);
-    lines.push(`Peers open: ${open} / ${peers.size}`);
+    for (const [,p] of peers) if (p.dc && p.dc.readyState === 'open') open++;
+    lines.push(`You: ${myName ? myName+' · ' : ''}${myId.slice(0,8)}  |  Health: ${health}`);
+    lines.push(`Peers open: ${open} / ${peers.size}  |  Flagged: ${flaggedPeers.size}`);
     for (const [pid, p] of peers) {
       const label = (p.name ? p.name : pid.slice(0,6));
       const dcState = p.dc ? p.dc.readyState : 'n/a';
       const rtt = p.rttMs ? ` ${p.rttMs}ms` : '';
-      lines.push(`- ${label}: ${dcState}${rtt}`);
-      // ensure remote avatar visible
+      const flagged = flaggedPeers.has(pid) ? ' ⚠️' : '';
+      lines.push(`- ${label}: ${dcState}${rtt}${flagged}`);
       ensureRemotePlayer(pid, p.name||'', p.color||'ffffff');
     }
     $('#stats').textContent = lines.join('\n');
   }
+  setInterval(updateStats, 500);
 
   // ---------- Start ----------
   respawn();
   frame();
 
-  // Periodic stats refresh
-  setInterval(updateStats, 500);
+  // ---------- Helpers ----------
+  // Expose to avoid accidental tree-shaking
+  window.__p2p_fps = { peers, ac, flaggedPeers };
+
 })();
 </script>
 </body>
